@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AppProvider } from './context/AppContext';
+import logoTspm from './logo_tspm.svg';
 import { Beranda } from './components/Beranda';
 import { Pendaftaran } from './components/Pendaftaran';
 import { Admin } from './components/Admin';
@@ -62,9 +63,9 @@ export default function App() {
             >
               <div className="relative w-11 h-11 bg-white rounded-full flex items-center justify-center shadow-lg border-2 border-[#FFD700] overflow-hidden select-none">
                 <img 
-                  src="/src/assets/images/tapak_suci_mascot_1781427955512.jpg" 
-                  alt="Tapak Suci Mascot" 
-                  className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
+                  src={logoTspm} 
+                  alt="Tapak Suci Logo" 
+                  className="w-full h-full p-0.5 object-contain transition-transform duration-300 group-hover:scale-110"
                   referrerPolicy="no-referrer"
                 />
               </div>

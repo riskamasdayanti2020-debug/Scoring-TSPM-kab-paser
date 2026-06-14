@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Pesilat, MatchTandingState, MatchSeniState, KategoriUsia, Ronde, JurusTandingPoint, DewanPenalti, JuriSeniScore, JuriTandingScore, TipePertandingan } from '../types';
 import { INITIAL_PESILAT, INITIAL_MATCHES_TANDING, INITIAL_MATCHES_SENI, DURASI_RONDE } from '../data';
+import { db, handleFirestoreError, OperationType } from '../firebase';
+import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocFromServer, getDocs } from 'firebase/firestore';
 
 interface AppContextType {
   pesilatList: Pesilat[];
@@ -74,17 +76,6 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const LOCAL_STORAGE_KEY = 'tapak_suci_scoring_v1';
-
-interface StorageState {
-  pesilatList: Pesilat[];
-  matchesTanding: MatchTandingState[];
-  matchesSeni: MatchSeniState[];
-  activeTandingId: string | null;
-  activeSeniId: string | null;
-  autoActivateBySchedule?: boolean;
-}
-
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [pesilatList, setPesilatList] = useState<Pesilat[]>([]);
   const [matchesTanding, setMatchesTanding] = useState<MatchTandingState[]>([]);
@@ -93,7 +84,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeSeniId, setActiveSeniIdState] = useState<string | null>(null);
   const [autoActivateBySchedule, setAutoActivateByScheduleState] = useState<boolean>(true);
   
-  // Juri login info is local to the tab (does not sync across display, for safety, but can be maintained)
+  // Juri login info is local to the tab
   const [juriId, setJuriId] = useState<number | null>(() => {
     const saved = localStorage.getItem('tapak_suci_juri_id');
     return saved ? parseInt(saved, 10) : null;
@@ -102,167 +93,192 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return localStorage.getItem('tapak_suci_juri_seni') === 'true';
   });
 
-  // Load initial state
+  // Verify/test Firestore connection once on initial boot as required by the skill
   useEffect(() => {
-    const savedState = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (savedState) {
+    const testConnection = async () => {
       try {
-        const parsed = JSON.parse(savedState) as StorageState;
-        setPesilatList(parsed.pesilatList || INITIAL_PESILAT);
-        setMatchesTanding(parsed.matchesTanding || INITIAL_MATCHES_TANDING);
-        setMatchesSeni(parsed.matchesSeni || INITIAL_MATCHES_SENI);
-        setActiveTandingIdState(parsed.activeTandingId || null);
-        setActiveSeniIdState(parsed.activeSeniId || null);
-        setAutoActivateByScheduleState(parsed.autoActivateBySchedule !== undefined ? parsed.autoActivateBySchedule : true);
-      } catch (e) {
-        console.error('Failed to parse saved state, loading defaults', e);
-        loadDefaults();
+        await getDocFromServer(doc(db, 'metadata', 'global'));
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration.");
+        }
       }
-    } else {
-      loadDefaults();
-    }
+    };
+    testConnection();
   }, []);
 
-  const loadDefaults = () => {
-    setPesilatList(INITIAL_PESILAT);
-    setMatchesTanding(INITIAL_MATCHES_TANDING);
-    setMatchesSeni(INITIAL_MATCHES_SENI);
-    setActiveTandingIdState(INITIAL_MATCHES_TANDING[0]?.id || null);
-    setActiveSeniIdState(INITIAL_MATCHES_SENI[0]?.id || null);
-    setAutoActivateByScheduleState(true);
-    
-    const defaults: StorageState = {
-      pesilatList: INITIAL_PESILAT,
-      matchesTanding: INITIAL_MATCHES_TANDING,
-      matchesSeni: INITIAL_MATCHES_SENI,
-      activeTandingId: INITIAL_MATCHES_TANDING[0]?.id || null,
-      activeSeniId: INITIAL_MATCHES_SENI[0]?.id || null,
-      autoActivateBySchedule: true,
+  // Real-time Cloud Firestore synchronization of all collections
+  useEffect(() => {
+    let unsubPesilat: any = null;
+    let unsubMatchesTanding: any = null;
+    let unsubMatchesSeni: any = null;
+    let unsubMetadata: any = null;
+
+    try {
+      // 1. Pesilat list listener & seeder
+      unsubPesilat = onSnapshot(collection(db, 'pesilat'), (snapshot) => {
+        const list: Pesilat[] = [];
+        snapshot.forEach((docSnap) => {
+          list.push(docSnap.data() as Pesilat);
+        });
+        
+        if (list.length > 0) {
+          setPesilatList(list);
+        } else if (!snapshot.metadata.fromCache) {
+          // Empty on server - Seed initial mock data
+          INITIAL_PESILAT.forEach(async (p) => {
+            try {
+              await setDoc(doc(db, 'pesilat', p.id), p);
+            } catch (err) {
+              handleFirestoreError(err, OperationType.WRITE, `pesilat/${p.id}`);
+            }
+          });
+        }
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'pesilat');
+      });
+
+      // 2. Matches Tanding list listener & seeder
+      unsubMatchesTanding = onSnapshot(collection(db, 'matchesTanding'), (snapshot) => {
+        const list: MatchTandingState[] = [];
+        snapshot.forEach((docSnap) => {
+          list.push(docSnap.data() as MatchTandingState);
+        });
+        
+        if (list.length > 0) {
+          setMatchesTanding(list);
+        } else if (!snapshot.metadata.fromCache) {
+          // Empty on server - Seed initial mock data
+          INITIAL_MATCHES_TANDING.forEach(async (m) => {
+            try {
+              await setDoc(doc(db, 'matchesTanding', m.id), m);
+            } catch (err) {
+              handleFirestoreError(err, OperationType.WRITE, `matchesTanding/${m.id}`);
+            }
+          });
+        }
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'matchesTanding');
+      });
+
+      // 3. Matches Seni list listener & seeder
+      unsubMatchesSeni = onSnapshot(collection(db, 'matchesSeni'), (snapshot) => {
+        const list: MatchSeniState[] = [];
+        snapshot.forEach((docSnap) => {
+          list.push(docSnap.data() as MatchSeniState);
+        });
+        
+        if (list.length > 0) {
+          setMatchesSeni(list);
+        } else if (!snapshot.metadata.fromCache) {
+          // Empty on server - Seed initial mock data
+          INITIAL_MATCHES_SENI.forEach(async (m) => {
+            try {
+              await setDoc(doc(db, 'matchesSeni', m.id), m);
+            } catch (err) {
+              handleFirestoreError(err, OperationType.WRITE, `matchesSeni/${m.id}`);
+            }
+          });
+        }
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'matchesSeni');
+      });
+
+      // 4. Metadata values (active match tracking & configuration)
+      unsubMetadata = onSnapshot(doc(db, 'metadata', 'global'), (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.activeTandingId !== undefined) setActiveTandingIdState(data.activeTandingId);
+          if (data.activeSeniId !== undefined) setActiveSeniIdState(data.activeSeniId);
+          if (data.autoActivateBySchedule !== undefined) setAutoActivateByScheduleState(data.autoActivateBySchedule);
+        } else {
+          // Seed the metadata document
+          const firstTanding = INITIAL_MATCHES_TANDING[0]?.id || null;
+          const firstSeni = INITIAL_MATCHES_SENI[0]?.id || null;
+          setDoc(doc(db, 'metadata', 'global'), {
+            id: 'global',
+            activeTandingId: firstTanding,
+            activeSeniId: firstSeni,
+            autoActivateBySchedule: true
+          }).catch(err => {
+            handleFirestoreError(err, OperationType.WRITE, 'metadata/global');
+          });
+        }
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'metadata/global');
+      });
+
+    } catch (e) {
+      console.error("Failed to connect or subscribe to Firestore", e);
+    }
+
+    return () => {
+      if (unsubPesilat) unsubPesilat();
+      if (unsubMatchesTanding) unsubMatchesTanding();
+      if (unsubMatchesSeni) unsubMatchesSeni();
+      if (unsubMetadata) unsubMetadata();
     };
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(defaults));
+  }, []);
+
+  // Standard granular Firestore write operations used in mutations
+  const updateMatchTandingFirestore = async (match: MatchTandingState) => {
+    try {
+      await setDoc(doc(db, 'matchesTanding', match.id), match);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `matchesTanding/${match.id}`);
+    }
   };
 
-  // Sync with other tabs in real-time
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === LOCAL_STORAGE_KEY && e.newValue) {
-        try {
-          const parsed = JSON.parse(e.newValue) as StorageState;
-          if (parsed.pesilatList) setPesilatList(parsed.pesilatList);
-          if (parsed.matchesTanding) setMatchesTanding(parsed.matchesTanding);
-          if (parsed.matchesSeni) setMatchesSeni(parsed.matchesSeni);
-          if (parsed.activeTandingId !== undefined) setActiveTandingIdState(parsed.activeTandingId);
-          if (parsed.activeSeniId !== undefined) setActiveSeniIdState(parsed.activeSeniId);
-          if (parsed.autoActivateBySchedule !== undefined) setAutoActivateByScheduleState(parsed.autoActivateBySchedule);
-          lastStateStringRef.current = e.newValue;
-        } catch (err) {
-          console.error(err);
-        }
-      }
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
-
-  // Resilient High-Frequency Polling Synchronization Fallback
-  const lastStateStringRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    // Initial ref priming
-    const currentInit = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (currentInit) {
-      lastStateStringRef.current = currentInit;
+  const updateMatchSeniFirestore = async (match: MatchSeniState) => {
+    try {
+      await setDoc(doc(db, 'matchesSeni', match.id), match);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `matchesSeni/${match.id}`);
     }
-
-    const pollingLock = setInterval(() => {
-      const savedStateStr = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (savedStateStr && savedStateStr !== lastStateStringRef.current) {
-        lastStateStringRef.current = savedStateStr;
-        try {
-          const parsed = JSON.parse(savedStateStr) as StorageState;
-          if (parsed.pesilatList) setPesilatList(parsed.pesilatList);
-          if (parsed.matchesTanding) setMatchesTanding(parsed.matchesTanding);
-          if (parsed.matchesSeni) setMatchesSeni(parsed.matchesSeni);
-          if (parsed.activeTandingId !== undefined) setActiveTandingIdState(parsed.activeTandingId);
-          if (parsed.activeSeniId !== undefined) setActiveSeniIdState(parsed.activeSeniId);
-          if (parsed.autoActivateBySchedule !== undefined) setAutoActivateByScheduleState(parsed.autoActivateBySchedule);
-        } catch (err) {
-          console.error('[Polling Sync Error]:', err);
-        }
-      }
-    }, 450); // Checks every 450ms for low-latency non-blocking sync
-
-    return () => clearInterval(pollingLock);
-  }, []);
-
-  // Standard save helper
-  const saveState = (
-    updatedPesilat: Pesilat[],
-    updatedTanding: MatchTandingState[],
-    updatedSeni: MatchSeniState[],
-    actT: string | null,
-    actS: string | null,
-    autoActive?: boolean
-  ) => {
-    const val = autoActive !== undefined ? autoActive : autoActivateBySchedule;
-    const state: StorageState = {
-      pesilatList: updatedPesilat,
-      matchesTanding: updatedTanding,
-      matchesSeni: updatedSeni,
-      activeTandingId: actT,
-      activeSeniId: actS,
-      autoActivateBySchedule: val,
-    };
-    const serialized = JSON.stringify(state);
-    localStorage.setItem(LOCAL_STORAGE_KEY, serialized);
-    lastStateStringRef.current = serialized;
-    // Also trigger custom event for same-tab updates
-    window.dispatchEvent(new Event('storage_local_update'));
   };
 
-  // Subscribe to same-tab custom updates
-  useEffect(() => {
-    const onLocalUpdate = () => {
-      const savedState = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (savedState) {
-        try {
-          const parsed = JSON.parse(savedState) as StorageState;
-          setPesilatList(parsed.pesilatList);
-          setMatchesTanding(parsed.matchesTanding);
-          setMatchesSeni(parsed.matchesSeni);
-          setActiveTandingIdState(parsed.activeTandingId);
-          setActiveSeniIdState(parsed.activeSeniId);
-          if (parsed.autoActivateBySchedule !== undefined) setAutoActivateByScheduleState(parsed.autoActivateBySchedule);
-          lastStateStringRef.current = savedState;
-        } catch (err) {
-          console.error(err);
-        }
-      }
-    };
-    window.addEventListener('storage_local_update', onLocalUpdate);
-    return () => window.removeEventListener('storage_local_update', onLocalUpdate);
-  }, []);
+  const updateGlobalMetadata = async (fields: Partial<{ activeTandingId: string | null, activeSeniId: string | null, autoActivateBySchedule: boolean }>) => {
+    try {
+      await setDoc(doc(db, 'metadata', 'global'), fields, { merge: true });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'metadata/global');
+    }
+  };
 
   // Action: Add Pesilat
-  const addPesilat = (p: Omit<Pesilat, 'id'>) => {
+  const addPesilat = async (p: Omit<Pesilat, 'id'>) => {
     const newPesilat: Pesilat = {
       ...p,
       id: 'p_' + Date.now().toString(36),
     };
     const newList = [...pesilatList, newPesilat];
     setPesilatList(newList);
-    saveState(newList, matchesTanding, matchesSeni, activeTandingId, activeSeniId);
+    try {
+      await setDoc(doc(db, 'pesilat', newPesilat.id), newPesilat);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `pesilat/${newPesilat.id}`);
+    }
   };
 
   // Action: Delete Pesilat
-  const deletePesilat = (id: string) => {
+  const deletePesilat = async (id: string) => {
     const newList = pesilatList.filter(item => item.id !== id);
     setPesilatList(newList);
-    saveState(newList, matchesTanding, matchesSeni, activeTandingId, activeSeniId);
+    try {
+      await deleteDoc(doc(db, 'pesilat', id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `pesilat/${id}`);
+    }
   };
 
   // Action: Create Match Tanding
-  const createMatchTanding = (merahId: string, kuningId: string, kelas: string, kategoriUsia: KategoriUsia, babak: 'Penyisihan' | 'Semi Final' | 'Final' = 'Penyisihan') => {
+  const createMatchTanding = async (
+    merahId: string, 
+    kuningId: string, 
+    kelas: string, 
+    kategoriUsia: KategoriUsia, 
+    babak: 'Penyisihan' | 'Semi Final' | 'Final' = 'Penyisihan'
+  ) => {
     const pesilatMerah = pesilatList.find(p => p.id === merahId);
     const pesilatKuning = pesilatList.find(p => p.id === kuningId);
     if (!pesilatMerah || !pesilatKuning) return;
@@ -292,14 +308,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const updated = [...matchesTanding, newMatch];
     setMatchesTanding(updated);
-    // Auto set active if none
     const nextActive = activeTandingId || newMatch.id;
-    if (!activeTandingId) setActiveTandingIdState(nextActive);
-    saveState(pesilatList, updated, matchesSeni, nextActive, activeSeniId);
+    if (!activeTandingId) {
+      setActiveTandingIdState(nextActive);
+      updateGlobalMetadata({ activeTandingId: nextActive });
+    }
+    try {
+      await setDoc(doc(db, 'matchesTanding', newMatch.id), newMatch);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `matchesTanding/${newMatch.id}`);
+    }
   };
 
   // Action: Create Match Seni
-  const createMatchSeni = (pesilatId: string, kategoriSeni: 'Tunggal' | 'Ganda' | 'Regu' | 'Solo Kreatif') => {
+  const createMatchSeni = async (pesilatId: string, kategoriSeni: 'Tunggal' | 'Ganda' | 'Regu' | 'Solo Kreatif') => {
     const pesilat = pesilatList.find(p => p.id === pesilatId);
     if (!pesilat) return;
 
@@ -347,18 +369,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [...matchesSeni, newMatch];
     setMatchesSeni(updated);
     const nextActive = activeSeniId || newMatch.id;
-    if (!activeSeniId) setActiveSeniIdState(nextActive);
-    saveState(pesilatList, matchesTanding, updated, activeTandingId, nextActive);
+    if (!activeSeniId) {
+      setActiveSeniIdState(nextActive);
+      updateGlobalMetadata({ activeSeniId: nextActive });
+    }
+    try {
+      await setDoc(doc(db, 'matchesSeni', newMatch.id), newMatch);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `matchesSeni/${newMatch.id}`);
+    }
   };
 
   const setActiveTandingId = (id: string | null) => {
     setActiveTandingIdState(id);
-    saveState(pesilatList, matchesTanding, matchesSeni, id, activeSeniId);
+    updateGlobalMetadata({ activeTandingId: id });
   };
 
   const setActiveSeniId = (id: string | null) => {
     setActiveSeniIdState(id);
-    saveState(pesilatList, matchesTanding, matchesSeni, activeTandingId, id);
+    updateGlobalMetadata({ activeSeniId: id });
   };
 
   const loginAsJuri = (id: number | null, isSeni: boolean) => {
@@ -379,53 +408,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Timer: Set Tanding Timer state
   const setTandingTimerState = (id: string, isRunning: boolean, secondsRemaining: number) => {
-    const updated = matchesTanding.map(m => {
-      if (m.id === id) {
-        return {
-          ...m,
-          timerBerjalan: isRunning,
-          waktuSisa: secondsRemaining,
-          status: isRunning ? ('Sedang Tanding' as const) : m.status,
-        };
-      }
-      return m;
-    });
-    setMatchesTanding(updated);
-    saveState(pesilatList, updated, matchesSeni, activeTandingId, activeSeniId);
+    const m = matchesTanding.find(match => match.id === id);
+    if (!m) return;
+
+    const updatedMatch: MatchTandingState = {
+      ...m,
+      timerBerjalan: isRunning,
+      waktuSisa: secondsRemaining,
+      status: isRunning ? ('Sedang Tanding' as const) : m.status,
+    };
+
+    const updatedList = matchesTanding.map(item => item.id === id ? updatedMatch : item);
+    setMatchesTanding(updatedList);
+    updateMatchTandingFirestore(updatedMatch);
   };
 
   // Timer: Set Seni Timer state
   const setSeniTimerState = (id: string, isRunning: boolean, secondsElapsed: number) => {
-    const updated = matchesSeni.map(m => {
-      if (m.id === id) {
-        return {
-          ...m,
-          timerBerjalan: isRunning,
-          waktuBerjalan: secondsElapsed,
-          status: isRunning ? ('Sedang Penilaian' as const) : m.status,
-        };
-      }
-      return m;
-    });
-    setMatchesSeni(updated);
-    saveState(pesilatList, matchesTanding, updated, activeTandingId, activeSeniId);
+    const m = matchesSeni.find(match => match.id === id);
+    if (!m) return;
+
+    const updatedMatch: MatchSeniState = {
+      ...m,
+      timerBerjalan: isRunning,
+      waktuBerjalan: secondsElapsed,
+      status: isRunning ? ('Sedang Penilaian' as const) : m.status,
+    };
+
+    const updatedList = matchesSeni.map(item => item.id === id ? updatedMatch : item);
+    setMatchesSeni(updatedList);
+    updateMatchSeniFirestore(updatedMatch);
   };
 
   // Timer: Change Ronde Tanding
   const changeRondeTanding = (id: string, ronde: Ronde) => {
-    const updated = matchesTanding.map(m => {
-      if (m.id === id) {
-        return {
-          ...m,
-          rondeAktif: ronde,
-          waktuSisa: DURASI_RONDE[m.kategoriUsia],
-          timerBerjalan: false,
-        };
-      }
-      return m;
-    });
-    setMatchesTanding(updated);
-    saveState(pesilatList, updated, matchesSeni, activeTandingId, activeSeniId);
+    const m = matchesTanding.find(match => match.id === id);
+    if (!m) return;
+
+    const updatedMatch: MatchTandingState = {
+      ...m,
+      rondeAktif: ronde,
+      waktuSisa: DURASI_RONDE[m.kategoriUsia],
+      timerBerjalan: false,
+    };
+
+    const updatedList = matchesTanding.map(item => item.id === id ? updatedMatch : item);
+    setMatchesTanding(updatedList);
+    updateMatchTandingFirestore(updatedMatch);
   };
 
   // Scoring: Add Point Tanding
@@ -436,80 +465,81 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     tipe: 'Katak' | 'Ikan Terbang' | 'Terkaman' | 'Mawar Lepas Terkaman',
     nilaiX: number = 0
   ) => {
-    const updated = matchesTanding.map(m => {
-      if (m.id === matchId) {
-        // Base scores
-        let basePoin = 0;
-        switch (tipe) {
-          case 'Katak':
-            basePoin = 10;
-            break;
-          case 'Ikan Terbang':
-            basePoin = 20;
-            break;
-          case 'Terkaman':
-            basePoin = 30;
-            break;
-          case 'Mawar Lepas Terkaman':
-            basePoin = 10 + nilaiX;
-            break;
-        }
+    const m = matchesTanding.find(match => match.id === matchId);
+    if (!m) return;
 
-        const newPoint: JurusTandingPoint = {
-          id: 'pt_' + Math.random().toString(36).substr(2, 9),
-          timestamp: new Date().toISOString(),
-          ronde: m.rondeAktif,
-          tipe,
-          poin: basePoin,
-          juriId,
-          nilaiX: tipe === 'Mawar Lepas Terkaman' ? nilaiX : undefined,
-        };
+    let basePoin = 0;
+    switch (tipe) {
+      case 'Katak':
+        basePoin = 10;
+        break;
+      case 'Ikan Terbang':
+        basePoin = 20;
+        break;
+      case 'Terkaman':
+        basePoin = 30;
+        break;
+      case 'Mawar Lepas Terkaman':
+        basePoin = 10 + nilaiX;
+        break;
+    }
 
-        const currentSkor = { ...m.skorJuri };
-        const juriScore = currentSkor[juriId] || { juriId, poinMerah: [], poinKuning: [] };
+    const newPoint: JurusTandingPoint = {
+      id: 'pt_' + Math.random().toString(36).substr(2, 9),
+      timestamp: new Date().toISOString(),
+      ronde: m.rondeAktif,
+      tipe,
+      poin: basePoin,
+      juriId,
+      nilaiX: tipe === 'Mawar Lepas Terkaman' ? nilaiX : undefined,
+    };
 
-        if (sudut === 'Merah') {
-          juriScore.poinMerah = [...juriScore.poinMerah, newPoint];
-        } else {
-          juriScore.poinKuning = [...juriScore.poinKuning, newPoint];
-        }
+    const currentSkor = { ...m.skorJuri };
+    const juriScore = currentSkor[juriId] || { juriId, poinMerah: [], poinKuning: [] };
 
-        currentSkor[juriId] = juriScore;
+    if (sudut === 'Merah') {
+      juriScore.poinMerah = [...juriScore.poinMerah, newPoint];
+    } else {
+      juriScore.poinKuning = [...juriScore.poinKuning, newPoint];
+    }
 
-        return {
-          ...m,
-          skorJuri: currentSkor,
-        };
-      }
-      return m;
-    });
+    currentSkor[juriId] = juriScore;
 
-    setMatchesTanding(updated);
-    saveState(pesilatList, updated, matchesSeni, activeTandingId, activeSeniId);
+    const updatedMatch: MatchTandingState = {
+      ...m,
+      skorJuri: currentSkor,
+    };
+
+    const updatedList = matchesTanding.map(item => item.id === matchId ? updatedMatch : item);
+    setMatchesTanding(updatedList);
+    updateMatchTandingFirestore(updatedMatch);
   };
 
   // Scoring: Undo Point Tanding
   const undoTandingPoint = (matchId: string, juriId: number, sudut: 'Merah' | 'Kuning') => {
-    const updated = matchesTanding.map(m => {
-      if (m.id === matchId) {
-        const currentSkor = { ...m.skorJuri };
-        const juriScore = currentSkor[juriId];
-        if (!juriScore) return m;
+    const m = matchesTanding.find(match => match.id === matchId);
+    if (!m) return;
 
-        if (sudut === 'Merah' && juriScore.poinMerah.length > 0) {
-          juriScore.poinMerah = juriScore.poinMerah.slice(0, -1);
-        } else if (sudut === 'Kuning' && juriScore.poinKuning.length > 0) {
-          juriScore.poinKuning = juriScore.poinKuning.slice(0, -1);
-        }
+    const currentSkor = { ...m.skorJuri };
+    const juriScore = currentSkor[juriId];
+    if (!juriScore) return;
 
-        currentSkor[juriId] = juriScore;
-        return { ...m, skorJuri: currentSkor };
-      }
-      return m;
-    });
+    if (sudut === 'Merah' && juriScore.poinMerah.length > 0) {
+      juriScore.poinMerah = juriScore.poinMerah.slice(0, -1);
+    } else if (sudut === 'Kuning' && juriScore.poinKuning.length > 0) {
+      juriScore.poinKuning = juriScore.poinKuning.slice(0, -1);
+    }
 
-    setMatchesTanding(updated);
-    saveState(pesilatList, updated, matchesSeni, activeTandingId, activeSeniId);
+    currentSkor[juriId] = juriScore;
+
+    const updatedMatch: MatchTandingState = {
+      ...m,
+      skorJuri: currentSkor,
+    };
+
+    const updatedList = matchesTanding.map(item => item.id === matchId ? updatedMatch : item);
+    setMatchesTanding(updatedList);
+    updateMatchTandingFirestore(updatedMatch);
   };
 
   // Scoring: Add Dewan Penalti
@@ -519,108 +549,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     jenis: 'Teguran' | 'Peringatan' | 'Pelanggaran' | 'Jatuhan' | 'Mawar Lepas Terkaman',
     customPoin?: number
   ) => {
-    const updated = matchesTanding.map(m => {
-      if (m.id === matchId) {
-        let poin = 0;
-        let countSameType = 0;
+    const m = matchesTanding.find(match => match.id === matchId);
+    if (!m) return;
 
-        if (sudut === 'Merah') {
-          countSameType = m.penaltiMerah.filter(p => p.jenis === jenis).length + 1;
-        } else {
-          countSameType = m.penaltiKuning.filter(p => p.jenis === jenis).length + 1;
-        }
+    let poin = 0;
+    let countSameType = 0;
 
-        switch (jenis) {
-          case 'Teguran':
-            // Teguran 1: -1, Teguran 2: -2
-            poin = countSameType === 1 ? -1 : -2;
-            break;
-          case 'Peringatan':
-            // Peringatan 1: -5, Peringatan 2: -10
-            poin = countSameType === 1 ? -5 : -10;
-            break;
-          case 'Pelanggaran':
-            // Pelanggaran 1: -10, Pelanggaran 2: -20
-            poin = countSameType === 1 ? -10 : -20;
-            break;
-          case 'Jatuhan':
-            // Jatuhan: +3
-            poin = 3;
-            break;
-          case 'Mawar Lepas Terkaman':
-            // Mawar Lepas Terkaman: 10 + nilaiX
-            poin = customPoin !== undefined ? customPoin : 15;
-            break;
-        }
+    if (sudut === 'Merah') {
+      countSameType = m.penaltiMerah.filter(p => p.jenis === jenis).length + 1;
+    } else {
+      countSameType = m.penaltiKuning.filter(p => p.jenis === jenis).length + 1;
+    }
 
-        const penalti: DewanPenalti = {
-          id: 'pn_' + Math.random().toString(36).substr(2, 9),
-          timestamp: new Date().toISOString(),
-          ronde: m.rondeAktif,
-          jenis,
-          tingkat: (jenis !== 'Jatuhan' && jenis !== 'Mawar Lepas Terkaman') ? countSameType : undefined,
-          poin,
-        };
+    switch (jenis) {
+      case 'Teguran':
+        poin = countSameType === 1 ? -1 : -2;
+        break;
+      case 'Peringatan':
+        poin = countSameType === 1 ? -5 : -10;
+        break;
+      case 'Pelanggaran':
+        poin = countSameType === 1 ? -10 : -20;
+        break;
+      case 'Jatuhan':
+        poin = 3;
+        break;
+      case 'Mawar Lepas Terkaman':
+        poin = customPoin !== undefined ? customPoin : 15;
+        break;
+    }
 
-        if (sudut === 'Merah') {
-          return {
-            ...m,
-            penaltiMerah: [...m.penaltiMerah, penalti],
-          };
-        } else {
-          return {
-            ...m,
-            penaltiKuning: [...m.penaltiKuning, penalti],
-          };
-        }
-      }
-      return m;
-    });
+    const penalti: DewanPenalti = {
+      id: 'pn_' + Math.random().toString(36).substr(2, 9),
+      timestamp: new Date().toISOString(),
+      ronde: m.rondeAktif,
+      jenis,
+      tingkat: (jenis !== 'Jatuhan' && jenis !== 'Mawar Lepas Terkaman') ? countSameType : undefined,
+      poin,
+    };
 
-    setMatchesTanding(updated);
-    saveState(pesilatList, updated, matchesSeni, activeTandingId, activeSeniId);
+    const updatedMatch: MatchTandingState = {
+      ...m,
+      penaltiMerah: sudut === 'Merah' ? [...m.penaltiMerah, penalti] : m.penaltiMerah,
+      penaltiKuning: sudut === 'Kuning' ? [...m.penaltiKuning, penalti] : m.penaltiKuning,
+    };
+
+    const updatedList = matchesTanding.map(item => item.id === matchId ? updatedMatch : item);
+    setMatchesTanding(updatedList);
+    updateMatchTandingFirestore(updatedMatch);
   };
 
   // Scoring: Undo Dewan Penalti
   const undoDewanPenalti = (matchId: string, sudut: 'Merah' | 'Kuning') => {
-    const updated = matchesTanding.map(m => {
-      if (m.id === matchId) {
-        if (sudut === 'Merah' && m.penaltiMerah.length > 0) {
-          return {
-            ...m,
-            penaltiMerah: m.penaltiMerah.slice(0, -1),
-          };
-        } else if (sudut === 'Kuning' && m.penaltiKuning.length > 0) {
-          return {
-            ...m,
-            penaltiKuning: m.penaltiKuning.slice(0, -1),
-          };
-        }
-      }
-      return m;
-    });
+    const m = matchesTanding.find(match => match.id === matchId);
+    if (!m) return;
 
-    setMatchesTanding(updated);
-    saveState(pesilatList, updated, matchesSeni, activeTandingId, activeSeniId);
+    const updatedMatch: MatchTandingState = {
+      ...m,
+      penaltiMerah: (sudut === 'Merah' && m.penaltiMerah.length > 0) ? m.penaltiMerah.slice(0, -1) : m.penaltiMerah,
+      penaltiKuning: (sudut === 'Kuning' && m.penaltiKuning.length > 0) ? m.penaltiKuning.slice(0, -1) : m.penaltiKuning,
+    };
+
+    const updatedList = matchesTanding.map(item => item.id === matchId ? updatedMatch : item);
+    setMatchesTanding(updatedList);
+    updateMatchTandingFirestore(updatedMatch);
   };
 
   // Finish Match Tanding
   const finishMatchTanding = (matchId: string, pemenang: 'Merah' | 'Kuning', alasan: string) => {
-    const updated = matchesTanding.map(m => {
-      if (m.id === matchId) {
-        return {
-          ...m,
-          status: 'Selesai' as const,
-          timerBerjalan: false,
-          pemenang,
-          alasanPemenang: alasan,
-        };
-      }
-      return m;
-    });
+    const m = matchesTanding.find(match => match.id === matchId);
+    if (!m) return;
 
-    setMatchesTanding(updated);
-    saveState(pesilatList, updated, matchesSeni, activeTandingId, activeSeniId);
+    const updatedMatch: MatchTandingState = {
+      ...m,
+      status: 'Selesai' as const,
+      timerBerjalan: false,
+      pemenang,
+      alasanPemenang: alasan,
+    };
+
+    const updatedList = matchesTanding.map(item => item.id === matchId ? updatedMatch : item);
+    setMatchesTanding(updatedList);
+    updateMatchTandingFirestore(updatedMatch);
   };
 
   // Submit Juri Seni Score
@@ -640,126 +650,118 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       nilaiPenjiwaan?: number;
     }
   ) => {
-    const updated = matchesSeni.map(m => {
-      if (m.id === matchId) {
-        const currentSkor = { ...m.skorJuri };
-        const isTunggalRegu = m.kategoriSeni === 'Tunggal' || m.kategoriSeni === 'Regu';
-        
-        let calculatedTotal = 0;
-        let finalScoreObj: any = {
-          juriId,
-          jumlahKesalahan: inputs.jumlahKesalahan,
-          penguranganHukuman: inputs.penguranganHukuman,
-          catatan: inputs.catatan,
-        };
+    const m = matchesSeni.find(match => match.id === matchId);
+    if (!m) return;
 
-        if (isTunggalRegu) {
-          const nA = inputs.nilaiA !== undefined ? inputs.nilaiA : parseFloat((9.90 - inputs.jumlahKesalahan * 0.01).toFixed(2));
-          const nB = inputs.nilaiB !== undefined ? inputs.nilaiB : inputs.skorKemantapan;
-          calculatedTotal = parseFloat((nA + nB - inputs.penguranganHukuman).toFixed(2));
-          
-          finalScoreObj = {
-            ...finalScoreObj,
-            nilaiA: nA,
-            nilaiB: nB,
-            skorJurus: nA, // Keep updated for backward compatibility
-            skorKemantapan: nB, // Keep updated for backward compatibility
-            totalSkor: calculatedTotal,
-          };
-        } else {
-          const nTeknik = inputs.nilaiTeknik !== undefined ? inputs.nilaiTeknik : inputs.skorJurus;
-          const nKetegasan = inputs.nilaiKetegasan !== undefined ? inputs.nilaiKetegasan : inputs.skorKemantapan;
-          const nPenjiwaan = inputs.nilaiPenjiwaan !== undefined ? inputs.nilaiPenjiwaan : 0.25;
-          calculatedTotal = parseFloat((9.10 + nTeknik + nKetegasan + nPenjiwaan - inputs.penguranganHukuman).toFixed(2));
+    const currentSkor = { ...m.skorJuri };
+    const isTunggalRegu = m.kategoriSeni === 'Tunggal' || m.kategoriSeni === 'Regu';
+    
+    let calculatedTotal = 0;
+    let finalScoreObj: any = {
+      juriId,
+      jumlahKesalahan: inputs.jumlahKesalahan,
+      penguranganHukuman: inputs.penguranganHukuman,
+      catatan: inputs.catatan,
+    };
 
-          finalScoreObj = {
-            ...finalScoreObj,
-            nilaiTeknik: nTeknik,
-            nilaiKetegasan: nKetegasan,
-            nilaiPenjiwaan: nPenjiwaan,
-            skorJurus: nTeknik, // Map for backward compatibility
-            skorKemantapan: nKetegasan, // Map for backward compatibility
-            totalSkor: calculatedTotal,
-          };
-        }
+    if (isTunggalRegu) {
+      const nA = inputs.nilaiA !== undefined ? inputs.nilaiA : parseFloat((9.90 - inputs.jumlahKesalahan * 0.01).toFixed(2));
+      const nB = inputs.nilaiB !== undefined ? inputs.nilaiB : inputs.skorKemantapan;
+      calculatedTotal = parseFloat((nA + nB - inputs.penguranganHukuman).toFixed(2));
+      
+      finalScoreObj = {
+        ...finalScoreObj,
+        nilaiA: nA,
+        nilaiB: nB,
+        skorJurus: nA,
+        skorKemantapan: nB,
+        totalSkor: calculatedTotal,
+      };
+    } else {
+      const nTeknik = inputs.nilaiTeknik !== undefined ? inputs.nilaiTeknik : inputs.skorJurus;
+      const nKetegasan = inputs.nilaiKetegasan !== undefined ? inputs.nilaiKetegasan : inputs.skorKemantapan;
+      const nPenjiwaan = inputs.nilaiPenjiwaan !== undefined ? inputs.nilaiPenjiwaan : 0.25;
+      calculatedTotal = parseFloat((9.10 + nTeknik + nKetegasan + nPenjiwaan - inputs.penguranganHukuman).toFixed(2));
 
-        currentSkor[juriId] = finalScoreObj;
+      finalScoreObj = {
+        ...finalScoreObj,
+        nilaiTeknik: nTeknik,
+        nilaiKetegasan: nKetegasan,
+        nilaiPenjiwaan: nPenjiwaan,
+        skorJurus: nTeknik,
+        skorKemantapan: nKetegasan,
+        totalSkor: calculatedTotal,
+      };
+    }
 
-        // Rekalkulasi total skor akhir (rata-rata dari juri yang sudah mengisi)
-        const juriIds = Object.keys(currentSkor).map(id => parseInt(id, 10));
-        let sum = 0;
-        let count = 0;
-        juriIds.forEach(id => {
-          if (currentSkor[id]) {
-            sum += currentSkor[id].totalSkor;
-            count++;
-          }
-        });
+    currentSkor[juriId] = finalScoreObj;
 
-        const totalSkorAkhir = count > 0 ? parseFloat((sum / count).toFixed(2)) : 0;
-
-        return {
-          ...m,
-          skorJuri: currentSkor,
-          totalSkorAkhir,
-        };
+    const juriIds = Object.keys(currentSkor).map(id => parseInt(id, 10));
+    let sum = 0;
+    let count = 0;
+    juriIds.forEach(id => {
+      if (currentSkor[id]) {
+        sum += currentSkor[id].totalSkor;
+        count++;
       }
-      return m;
     });
 
-    setMatchesSeni(updated);
-    saveState(pesilatList, matchesTanding, updated, activeTandingId, activeSeniId);
+    const totalSkorAkhir = count > 0 ? parseFloat((sum / count).toFixed(2)) : 0;
+
+    const updatedMatch: MatchSeniState = {
+      ...m,
+      skorJuri: currentSkor,
+      totalSkorAkhir,
+    };
+
+    const updatedList = matchesSeni.map(item => item.id === matchId ? updatedMatch : item);
+    setMatchesSeni(updatedList);
+    updateMatchSeniFirestore(updatedMatch);
   };
 
   // Finish Match Seni
   const finishMatchSeni = (matchId: string) => {
-    const updated = matchesSeni.map(m => {
-      if (m.id === matchId) {
-        return {
-          ...m,
-          status: 'Selesai' as const,
-          timerBerjalan: false,
-        };
-      }
-      return m;
-    });
+    const m = matchesSeni.find(match => match.id === matchId);
+    if (!m) return;
 
-    setMatchesSeni(updated);
-    saveState(pesilatList, matchesTanding, updated, activeTandingId, activeSeniId);
+    const updatedMatch: MatchSeniState = {
+      ...m,
+      status: 'Selesai' as const,
+      timerBerjalan: false,
+    };
+
+    const updatedList = matchesSeni.map(item => item.id === matchId ? updatedMatch : item);
+    setMatchesSeni(updatedList);
+    updateMatchSeniFirestore(updatedMatch);
   };
 
   // Update match schedule
   const updateMatchSchedule = (matchId: string, isSeni: boolean, scheduledDate: string, scheduledTime: string) => {
     if (isSeni) {
-      const updated = matchesSeni.map(m => {
-        if (m.id === matchId) {
-          return { ...m, scheduledDate, scheduledTime };
-        }
-        return m;
-      });
-      setMatchesSeni(updated);
-      saveState(pesilatList, matchesTanding, updated, activeTandingId, activeSeniId);
+      const m = matchesSeni.find(match => match.id === matchId);
+      if (!m) return;
+      const updatedMatch = { ...m, scheduledDate, scheduledTime };
+      const updatedList = matchesSeni.map(item => item.id === matchId ? updatedMatch : item);
+      setMatchesSeni(updatedList);
+      updateMatchSeniFirestore(updatedMatch);
     } else {
-      const updated = matchesTanding.map(m => {
-        if (m.id === matchId) {
-          return { ...m, scheduledDate, scheduledTime };
-        }
-        return m;
-      });
-      setMatchesTanding(updated);
-      saveState(pesilatList, updated, matchesSeni, activeTandingId, activeSeniId);
+      const m = matchesTanding.find(match => match.id === matchId);
+      if (!m) return;
+      const updatedMatch = { ...m, scheduledDate, scheduledTime };
+      const updatedList = matchesTanding.map(item => item.id === matchId ? updatedMatch : item);
+      setMatchesTanding(updatedList);
+      updateMatchTandingFirestore(updatedMatch);
     }
   };
 
   const updateMatchBabak = (matchId: string, babak: 'Penyisihan' | 'Semi Final' | 'Final') => {
-    const updated = matchesTanding.map(m => {
-      if (m.id === matchId) {
-        return { ...m, babak };
-      }
-      return m;
-    });
-    setMatchesTanding(updated);
-    saveState(pesilatList, updated, matchesSeni, activeTandingId, activeSeniId);
+    const m = matchesTanding.find(match => match.id === matchId);
+    if (!m) return;
+
+    const updatedMatch: MatchTandingState = { ...m, babak };
+    const updatedList = matchesTanding.map(item => item.id === matchId ? updatedMatch : item);
+    setMatchesTanding(updatedList);
+    updateMatchTandingFirestore(updatedMatch);
   };
 
   // Automatic activation pool based on schedules
@@ -771,7 +773,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (liveTanding) {
       if (activeTandingId !== liveTanding.id) {
         setActiveTandingIdState(liveTanding.id);
-        saveState(pesilatList, matchesTanding, matchesSeni, liveTanding.id, activeSeniId);
+        updateGlobalMetadata({ activeTandingId: liveTanding.id });
       }
     } else {
       const pendingTanding = [...matchesTanding]
@@ -789,7 +791,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (pendingTanding.length > 0) {
         if (activeTandingId !== pendingTanding[0].id) {
           setActiveTandingIdState(pendingTanding[0].id);
-          saveState(pesilatList, matchesTanding, matchesSeni, pendingTanding[0].id, activeSeniId);
+          updateGlobalMetadata({ activeTandingId: pendingTanding[0].id });
         }
       }
     }
@@ -799,7 +801,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (liveSeni) {
       if (activeSeniId !== liveSeni.id) {
         setActiveSeniIdState(liveSeni.id);
-        saveState(pesilatList, matchesTanding, matchesSeni, activeTandingId, liveSeni.id);
+        updateGlobalMetadata({ activeSeniId: liveSeni.id });
       }
     } else {
       const pendingSeni = [...matchesSeni]
@@ -817,7 +819,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (pendingSeni.length > 0) {
         if (activeSeniId !== pendingSeni[0].id) {
           setActiveSeniIdState(pendingSeni[0].id);
-          saveState(pesilatList, matchesTanding, matchesSeni, activeTandingId, pendingSeni[0].id);
+          updateGlobalMetadata({ activeSeniId: pendingSeni[0].id });
         }
       }
     }
@@ -825,13 +827,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const setAutoActivateBySchedule = (val: boolean) => {
     setAutoActivateByScheduleState(val);
-    saveState(pesilatList, matchesTanding, matchesSeni, activeTandingId, activeSeniId, val);
+    updateGlobalMetadata({ autoActivateBySchedule: val });
   };
 
-  // Reset database to initial
-  const resetDatabase = () => {
-    localStorage.removeItem(LOCAL_STORAGE_KEY);
-    loadDefaults();
+  // Reset database to initial seeding states
+  const resetDatabase = async () => {
+    try {
+      const pesilatSnap = await getDocs(collection(db, 'pesilat'));
+      for (const ds of pesilatSnap.docs) {
+        await deleteDoc(doc(db, 'pesilat', ds.id));
+      }
+
+      const tandingSnap = await getDocs(collection(db, 'matchesTanding'));
+      for (const ds of tandingSnap.docs) {
+        await deleteDoc(doc(db, 'matchesTanding', ds.id));
+      }
+
+      const seniSnap = await getDocs(collection(db, 'matchesSeni'));
+      for (const ds of seniSnap.docs) {
+        await deleteDoc(doc(db, 'matchesSeni', ds.id));
+      }
+
+      await setDoc(doc(db, 'metadata', 'global'), {
+        id: 'global',
+        activeTandingId: INITIAL_MATCHES_TANDING[0]?.id || null,
+        activeSeniId: INITIAL_MATCHES_SENI[0]?.id || null,
+        autoActivateBySchedule: true
+      });
+
+      for (const p of INITIAL_PESILAT) {
+        await setDoc(doc(db, 'pesilat', p.id), p);
+      }
+      for (const m of INITIAL_MATCHES_TANDING) {
+        await setDoc(doc(db, 'matchesTanding', m.id), m);
+      }
+      for (const m of INITIAL_MATCHES_SENI) {
+        await setDoc(doc(db, 'matchesSeni', m.id), m);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'resetDatabase');
+    }
   };
 
   // Periodic judge heartbeat update

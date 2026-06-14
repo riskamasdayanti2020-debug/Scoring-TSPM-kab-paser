@@ -21,10 +21,12 @@ import {
   Clock, 
   FileText,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Download
 } from 'lucide-react';
 import { playBuzzer, playWarningBeep, playClick } from '../utils/audio';
 import { Ronde, MatchTandingState, MatchSeniState } from '../types';
+import { exportTandingPDF, exportSeniPDF } from '../utils/pdfExport';
 
 export const Dewan: React.FC = () => {
   const {
@@ -1710,19 +1712,34 @@ export const Dewan: React.FC = () => {
                         )}
 
                         {/* CTA PDF DOWNLOAD EXPORT BUTTON */}
-                        <div className="pt-2 border-t border-[#252525] flex items-center justify-between">
+                        <div className="pt-2 border-t border-[#252525] flex items-center gap-2 justify-between">
                           <span className="text-[10px] text-gray-500 font-sans font-normal">Sanksi: {m.penaltiMerah.length + m.penaltiKuning.length} Terdaftar</span>
-                          <button
-                            onClick={() => setPrintData({ type: 'tanding_detail', id: m.id })}
-                            className={`px-3.5 py-1.8 text-[11px] font-sans font-bold rounded-lg transition-all flex items-center space-x-1.5 cursor-pointer ${
-                              isCompleted 
-                                ? 'bg-[#FFD700] hover:bg-yellow-400 text-[#8B0000] font-black shadow-md'
-                                : 'bg-[#222] hover:bg-[#2c2c2c] text-gray-400 hover:text-white border border-[#333]'
-                            }`}
-                          >
-                            <Printer className="w-3.5 h-3.5" />
-                            <span>{isCompleted ? 'Unduh Laporan (PDF)' : 'Preview Lembar Nilai'}</span>
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => setPrintData({ type: 'tanding_detail', id: m.id })}
+                              className={`px-2.5 py-1.5 text-[11px] font-sans font-bold rounded-lg transition-all flex items-center space-x-1 cursor-pointer ${
+                                isCompleted 
+                                  ? 'bg-blue-950/40 text-blue-400 hover:bg-blue-900/20 border border-blue-900/40'
+                                  : 'bg-[#222] hover:bg-[#2c2c2c] text-gray-400 hover:text-white border border-[#333]'
+                              }`}
+                              title="Cetak via Browser"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>{isCompleted ? 'Cetak' : 'Preview'}</span>
+                            </button>
+                            <button
+                              onClick={() => exportTandingPDF(m)}
+                              className={`px-2.5 py-1.5 text-[11px] font-sans font-bold rounded-lg transition-all flex items-center space-x-1 cursor-pointer ${
+                                isCompleted 
+                                  ? 'bg-[#FFD700] hover:bg-yellow-400 text-[#8B0000] font-black shadow-md'
+                                  : 'bg-[#222] hover:bg-[#2c2c2c] text-gray-400 hover:text-white border border-[#333]'
+                              }`}
+                              title="Unduh PDF Resmi (jsPDF)"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Arsip PDF</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -1791,19 +1808,34 @@ export const Dewan: React.FC = () => {
                         )}
 
                         {/* CTA PDF DOWNLOAD EXPORT BUTTON */}
-                        <div className="pt-2 border-t border-[#252525] flex items-center justify-between font-mono text-[10px] text-gray-500">
+                        <div className="pt-2 border-t border-[#252525] flex items-center gap-2 justify-between font-mono text-[10px] text-gray-500">
                           <span className="font-sans font-normal">Kejurda Tapak Suci</span>
-                          <button
-                            onClick={() => setPrintData({ type: 'seni_detail', id: mSeni.id })}
-                            className={`px-3.5 py-1.8 text-[11px] font-sans font-bold rounded-lg transition-all flex items-center space-x-1.5 cursor-pointer ${
-                              isCompleted 
-                                ? 'bg-[#FFD700] hover:bg-yellow-400 text-[#8B0000] font-black shadow-md'
-                                : 'bg-[#222] hover:bg-[#2c2c2c] text-gray-400 hover:text-white border border-[#333]'
-                            }`}
-                          >
-                            <Printer className="w-3.5 h-3.5" />
-                            <span>{isCompleted ? 'Unduh Laporan (PDF)' : 'Preview Lembar Nilai'}</span>
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => setPrintData({ type: 'seni_detail', id: mSeni.id })}
+                              className={`px-2.5 py-1.5 text-[11px] font-sans font-bold rounded-lg transition-all flex items-center space-x-1 cursor-pointer ${
+                                isCompleted 
+                                  ? 'bg-blue-950/40 text-blue-400 hover:bg-blue-900/20 border border-blue-900/40'
+                                  : 'bg-[#222] hover:bg-[#2c2c2c] text-gray-400 hover:text-white border border-[#333]'
+                              }`}
+                              title="Cetak via Browser"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>{isCompleted ? 'Cetak' : 'Preview'}</span>
+                            </button>
+                            <button
+                              onClick={() => exportSeniPDF(mSeni)}
+                              className={`px-2.5 py-1.5 text-[11px] font-sans font-bold rounded-lg transition-all flex items-center space-x-1 cursor-pointer ${
+                                isCompleted 
+                                  ? 'bg-[#FFD700] hover:bg-yellow-400 text-[#8B0000] font-black shadow-md'
+                                  : 'bg-[#222] hover:bg-[#2c2c2c] text-gray-400 hover:text-white border border-[#333]'
+                              }`}
+                              title="Unduh PDF Resmi (jsPDF)"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                              <span>Arsip PDF</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );

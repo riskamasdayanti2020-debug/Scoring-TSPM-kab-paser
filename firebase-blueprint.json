@@ -1,0 +1,95 @@
+{
+  "entities": {
+    "pesilat": {
+      "title": "Pesilat",
+      "description": "Data pesilat Tapak Suci",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID unik pesilat" },
+        "nama": { "type": "string", "description": "Nama lengkap pesilat" },
+        "kontingen": { "type": "string", "description": "Asal kontingen / cabang" },
+        "kategoriUsia": { "type": "string", "description": "Kategori usia (Usia Dini, Pra Remaja, Remaja, Dewasa)" },
+        "tipe": { "type": "string", "description": "Tipe pertandingan (Tanding, Seni)" },
+        "berat": { "type": "string", "description": "Berat badan pesilat" },
+        "kelasTanding": { "type": "string", "description": "Kelas tanding" },
+        "kategoriSeni": { "type": "string", "description": "Kategori seni (Tunggal, Ganda, Regu, Solo Kreatif)" }
+      },
+      "required": ["id", "nama", "kontingen", "kategoriUsia", "tipe"]
+    },
+    "matchTanding": {
+      "title": "MatchTanding",
+      "description": "State dari pertandingan kategori tanding",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "ID unik pertandingan" },
+        "pesilatMerah": { "type": "object", "description": "Pesilat sudut merah" },
+        "pesilatKuning": { "type": "object", "description": "Pesilat sudut kuning" },
+        "kelas": { "type": "string", "description": "Kelas tanding" },
+        "kategoriUsia": { "type": "string" },
+        "status": { "type": "string", "enum": ["Belum Dimulai", "Sedang Tanding", "Selesai"] },
+        "rondeAktif": { "type": "string", "enum": ["1", "2", "Tambahan"] },
+        "waktuSisa": { "type": "number" },
+        "timerBerjalan": { "type": "boolean" },
+        "skorJuri": { "type": "object", "description": "Skor dari juri 1, 2, 3, 4" },
+        "penaltiMerah": { "type": "array" },
+        "penaltiKuning": { "type": "array" },
+        "pemenang": { "type": "string" },
+        "alasanPemenang": { "type": "string" },
+        "catatan": { "type": "string" },
+        "babak": { "type": "string" },
+        "scheduledDate": { "type": "string" },
+        "scheduledTime": { "type": "string" }
+      },
+      "required": ["id", "pesilatMerah", "pesilatKuning", "kelas", "kategoriUsia", "status", "rondeAktif", "waktuSisa", "timerBerjalan", "skorJuri", "penaltiMerah", "penaltiKuning"]
+    },
+    "matchSeni": {
+      "title": "MatchSeni",
+      "description": "State dari pertandingan kategori Seni TGRS",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "pesilat": { "type": "object" },
+        "kategoriSeni": { "type": "string" },
+        "status": { "type": "string", "enum": ["Belum Dimulai", "Sedang Penilaian", "Selesai"] },
+        "timerBerjalan": { "type": "boolean" },
+        "waktuBerjalan": { "type": "number" },
+        "skorJuri": { "type": "object" },
+        "totalSkorAkhir": { "type": "number" },
+        "pemenangSeni": { "type": "boolean" },
+        "scheduledDate": { "type": "string" },
+        "scheduledTime": { "type": "string" }
+      },
+      "required": ["id", "pesilat", "kategoriSeni", "status", "timerBerjalan", "waktuBerjalan", "skorJuri", "totalSkorAkhir"]
+    },
+    "metadata": {
+      "title": "Metadata",
+      "description": "Metadata sistem",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "activeTandingId": { "type": "string" },
+        "activeSeniId": { "type": "string" },
+        "autoActivateBySchedule": { "type": "boolean" }
+      },
+      "required": ["id"]
+    }
+  },
+  "firestore": {
+    "pesilat": {
+      "schema": { "$ref": "#/entities/pesilat" },
+      "description": "Daftar pesilat Tapak Suci"
+    },
+    "matchesTanding": {
+      "schema": { "$ref": "#/entities/matchTanding" },
+      "description": "Pertandingan kategori tanding"
+    },
+    "matchesSeni": {
+      "schema": { "$ref": "#/entities/matchSeni" },
+      "description": "Pertandingan kategori seni"
+    },
+    "metadata": {
+      "schema": { "$ref": "#/entities/metadata" },
+      "description": "Metadata state global"
+    }
+  }
+}

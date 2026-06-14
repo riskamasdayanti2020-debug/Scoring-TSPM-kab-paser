@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAppState } from '../context/AppContext';
 import { KategoriUsia, MatchTandingState, MatchSeniState, Ronde } from '../types';
 import { Settings2, PlusCircle, RotateCcw, Award, PlayCircle, Eye, Trash2, Calendar, FileSpreadsheet, Download, Printer, LogOut, ChevronLeft, ChevronRight, Clock, Edit2, X, Check } from 'lucide-react';
+import { exportTandingPDF, exportSeniPDF, exportSummaryPDF } from '../utils/pdfExport';
 
 export const Admin: React.FC = () => {
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => {
@@ -1012,16 +1013,26 @@ export const Admin: React.FC = () => {
             <FileSpreadsheet className="w-5 h-5 text-green-500 shrink-0" />
             <div>
               <h2 className="text-sm md:text-base font-black text-white uppercase tracking-tight">Pusat Administrasi & Ekspor Rekap Resmi</h2>
-              <p className="text-gray-400 text-xs font-sans tracking-tight">Unduh berkas Microsoft Excel (CSV) atau cetak scorecard & piagam laporan pertandingan resmi ke format PDF.</p>
+              <p className="text-gray-400 text-xs font-sans tracking-tight">Unduh berkas Microsoft Excel (CSV) atau cetak scorecard & laporan pertandingan resmi ke format PDF.</p>
             </div>
           </div>
-          <button
-            onClick={() => setPrintData({ type: 'summary' })}
-            className="px-4 py-2 bg-blue-950/40 text-blue-400 hover:bg-blue-900/20 rounded-lg text-xs font-mono font-bold flex items-center justify-center space-x-1.5 border border-blue-900/30 transition-all cursor-pointer shrink-0"
-          >
-            <Printer className="w-4 h-4" />
-            <span>Cetak Ringkasan Event (PDF)</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              onClick={() => setPrintData({ type: 'summary' })}
+              className="px-4 py-2 bg-blue-950/40 text-blue-400 hover:bg-blue-900/20 rounded-lg text-xs font-mono font-bold flex items-center justify-center space-x-1.5 border border-blue-900/30 transition-all cursor-pointer shrink-0"
+            >
+              <Printer className="w-4 h-4" />
+              <span>Cetak Ringkasan Event</span>
+            </button>
+            <button
+              onClick={() => exportSummaryPDF(matchesTanding, matchesSeni)}
+              className="px-4 py-2 bg-yellow-950/40 text-[#FFD700] hover:bg-yellow-900/20 rounded-lg text-xs font-mono font-bold flex items-center justify-center space-x-1.5 border border-yellow-900/30 transition-all cursor-pointer shrink-0"
+              title="Unduh seluruh rekapitulasi pertandingan ke PDF"
+            >
+              <Download className="w-4 h-4" />
+              <span>Unduh Arsip PDF (jsPDF)</span>
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1419,6 +1430,16 @@ export const Admin: React.FC = () => {
                             >
                               <Printer className="w-3.5 h-3.5" />
                             </button>
+
+                            {/* Export to PDF using jsPDF */}
+                            <button
+                              type="button"
+                              onClick={() => exportTandingPDF(match)}
+                              className="p-1.5 border border-red-900/50 text-red-400 hover:text-white bg-red-950/20 hover:bg-red-900/30 rounded-lg transition-all cursor-pointer shrink-0 shadow-sm"
+                              title="Unduh Scorecard PDF Resmi (.pdf)"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -1537,6 +1558,16 @@ export const Admin: React.FC = () => {
                               title="Cetak Scorecard Resmi"
                             >
                               <Printer className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Export to PDF using jsPDF */}
+                            <button
+                              type="button"
+                              onClick={() => exportSeniPDF(mSeni)}
+                              className="p-1.5 border border-amber-900/50 text-amber-400 hover:text-white bg-amber-950/20 hover:bg-amber-900/30 rounded-lg transition-all cursor-pointer shrink-0 shadow-sm"
+                              title="Unduh Scorecard PDF Resmi (.pdf)"
+                            >
+                              <Download className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </div>
