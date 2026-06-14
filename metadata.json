@@ -1,0 +1,6 @@
+{
+  "name": "Scoring Pencak Silat Tapak Suci",
+  "description": "Sistem penilaian dan manajemen pertandingan Pencak Silat Tapak Suci Putera Muhammadiyah (Tanding & Seni TGRS)",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
