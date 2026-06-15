@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef } from 'r
 import { Pesilat, MatchTandingState, MatchSeniState, KategoriUsia, Ronde, JurusTandingPoint, DewanPenalti, JuriSeniScore, JuriTandingScore, TipePertandingan } from '../types';
 import { INITIAL_PESILAT, INITIAL_MATCHES_TANDING, INITIAL_MATCHES_SENI, DURASI_RONDE } from '../data';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocFromServer, getDocs } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc, deleteDoc, getDocFromServer, getDocs, enableIndexedDbPersistence } from 'firebase/firestore';
 
 interface AppContextType {
   pesilatList: Pesilat[];
@@ -14,6 +14,9 @@ interface AppContextType {
   isJuriSeni: boolean;
   autoActivateBySchedule: boolean;
   setAutoActivateBySchedule: (val: boolean) => void;
+  displayType: 'TV' | 'Tanding' | 'Seni';
+  updateDisplayType: (type: 'TV' | 'Tanding' | 'Seni') => void;
+  juriStatus: { [juriId: string]: { lastSeen: number; type: 'Seni' | 'Tanding'; online: boolean } };
   
   // Actions
   addPesilat: (p: Omit<Pesilat, 'id'>) => void;
@@ -83,6 +86,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeTandingId, setActiveTandingIdState] = useState<string | null>(null);
   const [activeSeniId, setActiveSeniIdState] = useState<string | null>(null);
   const [autoActivateBySchedule, setAutoActivateByScheduleState] = useState<boolean>(true);
+  const [displayType, setDisplayTypeState] = useState<'TV' | 'Tanding' | 'Seni'>('TV');
+  const [juriStatus, setJuriStatus] = useState<{ [juriId: string]: { lastSeen: number; type: 'Seni' | 'Tanding'; online: boolean } }>({
+    '1': { lastSeen: 0, type: 'Tanding', online: false },
+    '2': { lastSeen: 0, type: 'Tanding', online: false },
+    '3': { lastSeen: 0, type: 'Tanding', online: false },
+    '4': { lastSeen: 0, type: 'Tanding', online: false },
+  });
   
   // Juri login info is local to the tab
   const [juriId, setJuriId] = useState<number | null>(() => {
@@ -93,9 +103,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return localStorage.getItem('tapak_suci_juri_seni') === 'true';
   });
 
-  // Verify/test Firestore connection once on initial boot as required by the skill
+  const [persistenceInitialized, setPersistenceInitialized] = useState<boolean>(false);
+
+  // Enable offline persistence and test network connection once on initial boot
   useEffect(() => {
-    const testConnection = async () => {
+    let active = true;
+    const initializePersistenceAndTest = async () => {
+      if (typeof window !== 'undefined') {
+        try {
+          await enableIndexedDbPersistence(db);
+          console.log('Firebase Firestore offline persistence enabled successfully.');
+        } catch (err: any) {
+          if (err.code === 'failed-precondition') {
+            console.warn('Firestore persistence failed-precondition: Multiple tabs open. Only one tab can have persistence enabled.');
+          } else if (err.code === 'unimplemented') {
+            console.warn('Firestore persistence unimplemented: Browser does not support offline persistence features.');
+          } else {
+            console.warn('Firestore persistence initialization error:', err);
+          }
+        }
+      }
+
+      if (active) {
+        setPersistenceInitialized(true);
+      }
+
       try {
         await getDocFromServer(doc(db, 'metadata', 'global'));
       } catch (error) {
@@ -104,11 +136,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
     };
-    testConnection();
+
+    initializePersistenceAndTest();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Real-time Cloud Firestore synchronization of all collections
   useEffect(() => {
+    if (!persistenceInitialized) return;
+
     let unsubPesilat: any = null;
     let unsubMatchesTanding: any = null;
     let unsubMatchesSeni: any = null;
@@ -191,6 +230,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (data.activeTandingId !== undefined) setActiveTandingIdState(data.activeTandingId);
           if (data.activeSeniId !== undefined) setActiveSeniIdState(data.activeSeniId);
           if (data.autoActivateBySchedule !== undefined) setAutoActivateByScheduleState(data.autoActivateBySchedule);
+          if (data.displayType !== undefined) setDisplayTypeState(data.displayType);
+          
+          if (data.juriStatus) {
+            const now = Date.now();
+            const processed: any = {};
+            [1, 2, 3, 4].forEach((id) => {
+              const status = data.juriStatus[id];
+              if (status) {
+                const isOnline = now - status.lastSeen < 25000;
+                processed[id] = {
+                  lastSeen: status.lastSeen,
+                  type: status.type,
+                  online: isOnline
+                };
+              } else {
+                processed[id] = { lastSeen: 0, type: 'Tanding', online: false };
+              }
+            });
+            setJuriStatus(processed);
+          }
         } else {
           // Seed the metadata document
           const firstTanding = INITIAL_MATCHES_TANDING[0]?.id || null;
@@ -199,7 +258,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             id: 'global',
             activeTandingId: firstTanding,
             activeSeniId: firstSeni,
-            autoActivateBySchedule: true
+            autoActivateBySchedule: true,
+            displayType: 'TV',
+            juriStatus: {}
           }).catch(err => {
             handleFirestoreError(err, OperationType.WRITE, 'metadata/global');
           });
@@ -218,7 +279,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (unsubMatchesSeni) unsubMatchesSeni();
       if (unsubMetadata) unsubMetadata();
     };
-  }, []);
+  }, [persistenceInitialized]);
 
   // Standard granular Firestore write operations used in mutations
   const updateMatchTandingFirestore = async (match: MatchTandingState) => {
@@ -237,12 +298,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const updateGlobalMetadata = async (fields: Partial<{ activeTandingId: string | null, activeSeniId: string | null, autoActivateBySchedule: boolean }>) => {
+  const updateGlobalMetadata = async (fields: Partial<{ activeTandingId: string | null, activeSeniId: string | null, autoActivateBySchedule: boolean, displayType: 'TV' | 'Tanding' | 'Seni', juriStatus: any }>) => {
     try {
       await setDoc(doc(db, 'metadata', 'global'), fields, { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, 'metadata/global');
     }
+  };
+
+  const updateDisplayType = async (type: 'TV' | 'Tanding' | 'Seni') => {
+    setDisplayTypeState(type);
+    await updateGlobalMetadata({ displayType: type });
   };
 
   // Action: Add Pesilat
@@ -872,17 +938,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Periodic judge heartbeat update
   useEffect(() => {
     if (juriId !== null) {
-      const updateHeartbeat = () => {
+      const updateHeartbeat = async () => {
         try {
-          localStorage.setItem(`tapak_suci_juri_heartbeat_${juriId}`, Date.now().toString());
+          const timestamp = Date.now();
+          localStorage.setItem(`tapak_suci_juri_heartbeat_${juriId}`, timestamp.toString());
           localStorage.setItem(`tapak_suci_juri_type_${juriId}`, isJuriSeni ? 'Seni' : 'Tanding');
+          
+          await setDoc(doc(db, 'metadata', 'global'), {
+            juriStatus: {
+              [juriId.toString()]: {
+                lastSeen: timestamp,
+                type: isJuriSeni ? 'Seni' : 'Tanding'
+              }
+            }
+          }, { merge: true });
         } catch (e) {
-          console.error('Error writing juri heartbeat', e);
+          console.error('Error writing juri heartbeat to Firestore', e);
         }
       };
 
       updateHeartbeat();
-      const heartbeatInterval = setInterval(updateHeartbeat, 2000);
+      const heartbeatInterval = setInterval(updateHeartbeat, 8000);
 
       return () => {
         clearInterval(heartbeatInterval);
@@ -906,6 +982,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isJuriSeni,
         autoActivateBySchedule,
         setAutoActivateBySchedule,
+        displayType,
+        updateDisplayType,
+        juriStatus,
         
         addPesilat,
         deletePesilat,

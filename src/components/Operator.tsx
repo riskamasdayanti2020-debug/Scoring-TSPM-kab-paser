@@ -40,45 +40,24 @@ export const Operator: React.FC = () => {
     changeRondeTanding,
     finishMatchTanding,
     finishMatchSeni,
+    juriStatus,
+    updateDisplayType,
   } = useAppState();
 
-  const [activeTab, setActiveTab] = useState<'Tanding' | 'Seni'>('Tanding');
+  const [activeTab, setActiveTabState] = useState<'Tanding' | 'Seni'>('Tanding');
   const [isListening, setIsListening] = useState(false);
   const [lastCommand, setLastCommand] = useState<string>('');
   const [speechError, setSpeechError] = useState<string>('');
 
-  // Monitor Juri Connection States
-  const [juriConnection, setJuriConnection] = useState<{
-    [id: number]: { online: boolean; type?: 'Seni' | 'Tanding' | null; lastSeen?: number }
-  }>({
-    1: { online: false, type: null },
-    2: { online: false, type: null },
-    3: { online: false, type: null },
-    4: { online: false, type: null },
-  });
-
+  const activeTabRef = useRef(activeTab);
   useEffect(() => {
-    const checkConnections = () => {
-      const updated: any = {};
-      const now = Date.now();
-      [1, 2, 3, 4].forEach((id) => {
-        const hb = localStorage.getItem(`tapak_suci_juri_heartbeat_${id}`);
-        const type = localStorage.getItem(`tapak_suci_juri_type_${id}`) as 'Seni' | 'Tanding' | null;
-        if (hb) {
-          const timestamp = parseInt(hb, 10);
-          const isOnline = now - timestamp < 6000; // considered online if updated within last 6 seconds
-          updated[id] = { online: isOnline, type: isOnline ? type : null, lastSeen: timestamp };
-        } else {
-          updated[id] = { online: false, type: null };
-        }
-      });
-      setJuriConnection(updated);
-    };
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
 
-    checkConnections();
-    const interval = setInterval(checkConnections, 1500);
-    return () => clearInterval(interval);
-  }, []);
+  const setActiveTab = (tab: 'Tanding' | 'Seni') => {
+    setActiveTabState(tab);
+    updateDisplayType(tab);
+  };
 
   // Active Match Tanding
   const activeTanding = matchesTanding.find((m) => m.id === activeTandingId);
@@ -431,7 +410,7 @@ export const Operator: React.FC = () => {
 
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           {[1, 2, 3, 4].map((id) => {
-            const status = juriConnection[id] || { online: false, type: null };
+            const status = juriStatus[id.toString()] || { online: false, type: null };
             return (
               <div 
                 key={id}

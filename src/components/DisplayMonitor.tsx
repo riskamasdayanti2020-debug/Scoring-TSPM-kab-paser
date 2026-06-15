@@ -22,9 +22,13 @@ export const DisplayMonitor: React.FC = () => {
     matchesSeni,
     activeTandingId,
     activeSeniId,
+    displayType,
+    updateDisplayType,
   } = useAppState();
 
-  const [displayType, setDisplayType] = useState<'Tanding' | 'Seni' | 'TV'>('TV');
+  const setDisplayType = (type: 'TV' | 'Tanding' | 'Seni') => {
+    updateDisplayType(type);
+  };
   const [cornerColorTheme, setCornerColorTheme] = useState<'MerahKuning' | 'MerahBiru'>('MerahKuning');
   const [tandingSubView, setTandingSubView] = useState<'ronde' | 'progres' | 'teknik' | 'juri'>('ronde');
   const [seniSubView, setSeniSubView] = useState<'borang' | 'analisis'>('borang');
